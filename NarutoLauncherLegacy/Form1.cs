@@ -11,7 +11,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using AutoUpdaterDotNET;
 
-// RESOLVE A AMBIGUIDADE DE BOTÕES
 using Button = System.Windows.Forms.Button;
 
 namespace NarutoLauncherLegacy
@@ -43,19 +42,18 @@ namespace NarutoLauncherLegacy
         private string arquivoContas = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "contas_salvas.dat");
         private string arquivoConfig = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.dat");
         private static readonly object lockArquivo = new object();
-        private string sessionID = Guid.NewGuid().ToString();
+
+        private string sessionID = "default_session";
 
         public static HashSet<int> pidsInjetadosGlobais = new HashSet<int>();
         private int meuFlashPid = 0;
         private bool dllInjetada = false;
         private bool speedAtivo = false;
-        private int contadorTelas = 1;
         private bool isShuttingDown = false;
         private string nomeJogadorAtual = "";
 
-        // Segurança contra Exploit
+        // Segurança
         private bool acessoLiberado = false;
-
         private bool discordHabilitado = true;
         private bool usarGPU = true;
         private Timer rastreadorNome;
@@ -75,10 +73,10 @@ namespace NarutoLauncherLegacy
             {
                 if (args.IsUpdateAvailable)
                 {
-                    if (MessageBox.Show($"Uma nova atualização foi encontrada (Versão {args.CurrentVersion}).\n\nSua versão atual: {args.InstalledVersion}\n\nEsta atualização é OBRIGATÓRIA para continuar jogando. Deseja baixar agora?", "Atualização Crítica", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    if (MessageBox.Show($"Uma nova atualização foi encontrada (Versão {args.CurrentVersion}).\n\nSua versão atual: {args.InstalledVersion}\n\nEsta atualização é OBRIGATÓRIA. Baixar agora?", "Atualização", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     {
                         try { if (AutoUpdater.DownloadUpdate(args)) { PrepararFechamentoSeguro(); Application.Exit(); } }
-                        catch (Exception ex) { MessageBox.Show("Erro ao baixar: " + ex.Message); }
+                        catch (Exception ex) { MessageBox.Show("Erro: " + ex.Message); }
                     }
                     else { PrepararFechamentoSeguro(); Environment.Exit(0); }
                 }
@@ -86,83 +84,61 @@ namespace NarutoLauncherLegacy
             AutoUpdater.Start("https://raw.githubusercontent.com/Proteuzada/NarutoOnline-Launcher/refs/heads/main/update.xml");
 
             CarregarConfiguracoes();
-            LimparSessoesAntigas();
-
             ConfigurarInterface();
             CarregarContasSalvas();
 
-            // Instanciando nossos novos Módulos Separados
-            discord = new DiscordIntegration(discordHabilitado);
-            InitBrowserModule();
-
-            discord.Inicializar();
-            IniciarRastreadorDeNome();
-            MemoryInjector.OtimizarRAM(true);
-
-            // TAB protegido contra Exploit
             this.KeyDown += (s, e) => {
                 if (e.KeyCode == Keys.Tab && acessoLiberado && !pnlLogin.Visible) { AlternarMenuLateral(); e.Handled = true; e.SuppressKeyPress = true; }
             };
 
             this.Load += Form1_Load;
+            this.FormClosing += Form1_FormClosing;
         }
 
         private async void Form1_Load(object sender, EventArgs e)
         {
-            // Bloqueio Total para evitar Cliques Invisíveis
             this.Enabled = false;
             pnlLogin.Visible = false;
 
-            Panel pnlAguarde = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(15, 15, 15), Name = "pnlAguarde" };
-            Label lblWait = new Label { Text = "Verificando integridade do Sistema...", ForeColor = Color.White, Font = new Font("Segoe UI", 12), AutoSize = true, Location = new Point(50, 50) };
-            pnlAguarde.Controls.Add(lblWait);
-            this.Controls.Add(pnlAguarde);
-            pnlAguarde.BringToFront();
-
-            // Chamando o SecurityManager novo
             bool temAcesso = await SecurityManager.VerificarAcesso();
-
-            this.Enabled = true;
 
             if (temAcesso)
             {
-                acessoLiberado = true;
-                this.Controls.Remove(pnlAguarde);
-                pnlLogin.Visible = true;
-                pnlLogin.BringToFront();
+                FinalizarCarregamentoEAutorizar();
             }
             else
             {
-                this.Controls.Remove(pnlLogin);
-                this.Controls.Remove(pnlMenuLateral);
-                this.Controls.Remove(btnToggleMenu);
-                GerarTelaDeBloqueio();
+                using (var telaHWID = new FormHWID())
+                {
+                    if (telaHWID.ShowDialog() == DialogResult.OK)
+                    {
+                        FinalizarCarregamentoEAutorizar();
+                    }
+                    else
+                    {
+                        Process.GetCurrentProcess().Kill();
+                    }
+                }
             }
         }
 
-        private void GerarTelaDeBloqueio()
+        private void FinalizarCarregamentoEAutorizar()
         {
-            string meuHwid = SecurityManager.ObterHWID();
-            Panel pnlBloqueio = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(15, 15, 15) };
-            Panel pnlCentro = new Panel { Size = new Size(500, 350), BackColor = Color.FromArgb(25, 25, 25), BorderStyle = BorderStyle.FixedSingle };
+            acessoLiberado = true;
+            this.Enabled = true;
 
-            Label lblTitulo = new Label { Text = "⚠️ ACESSO RESTRITO", ForeColor = Color.IndianRed, Font = new Font("Segoe UI", 18, FontStyle.Bold), AutoSize = true, Location = new Point(20, 30) };
-            Label lblInstrucoes = new Label { Text = "Este computador não possui autorização.\n\n1. Copie o seu código HWID abaixo.\n2. Entre no nosso Discord.\n3. Registre o código no canal de autenticação.\n\nSeu HWID: " + meuHwid, ForeColor = Color.LightGray, Font = new Font("Segoe UI", 11), AutoSize = true, Location = new Point(20, 80) };
+            discord = new DiscordIntegration(discordHabilitado);
+            discord.Inicializar();
 
-            Button btnCopiar = new Button { Text = "COPIAR HWID E ABRIR DISCORD", BackColor = Color.FromArgb(88, 101, 242), ForeColor = Color.White, Font = new Font("Segoe UI", 10, FontStyle.Bold), FlatStyle = FlatStyle.Flat, Size = new Size(460, 45), Location = new Point(20, 260), Cursor = Cursors.Hand };
-            btnCopiar.FlatAppearance.BorderSize = 0;
-            btnCopiar.Click += (s, ev) => { Clipboard.SetText(meuHwid); Process.Start(new ProcessStartInfo { FileName = "https://discord.gg/jsyztbEg4Z", UseShellExecute = true }); Application.Exit(); };
+            pnlLogin.Visible = true;
+            pnlLogin.BringToFront();
 
-            pnlCentro.Controls.AddRange(new Control[] { lblTitulo, lblInstrucoes, btnCopiar });
-            pnlBloqueio.Controls.Add(pnlCentro);
-            pnlBloqueio.Resize += (s, e) => { pnlCentro.Left = (pnlBloqueio.Width - pnlCentro.Width) / 2; pnlCentro.Top = (pnlBloqueio.Height - pnlCentro.Height) / 2; };
-            this.Controls.Add(pnlBloqueio);
-            pnlBloqueio.BringToFront();
+            IniciarRastreadorDeNome();
+            MemoryInjector.OtimizarRAM(true);
         }
 
         private void InitBrowserModule()
         {
-            // O nosso novo BrowserEngine cuidando de tudo!
             motorNavegador = new BrowserEngine(sessionID, usarGPU, ResetarEstadoInjecao, () => { if (acessoLiberado) AlternarMenuLateral(); });
             motorNavegador.InicializarCefSharp();
             browser = motorNavegador.CriarNavegador();
@@ -172,9 +148,22 @@ namespace NarutoLauncherLegacy
 
         private async Task ExecutarLoginProcesso()
         {
-            string emailAtual = cmbEmail.Text.Trim(); string senhaAtual = txtSenha.Text; string servidorAtual = txtServerLogin.Text.Trim();
-            if (string.IsNullOrEmpty(emailAtual) || string.IsNullOrEmpty(senhaAtual) || string.IsNullOrEmpty(servidorAtual)) { lblStatusLogin.Text = "Preencha todos os campos!"; lblStatusLogin.ForeColor = Color.Red; return; }
-            lblStatusLogin.Text = "● Autenticando com a OAS Games..."; lblStatusLogin.ForeColor = Color.Orange; btnLogar.Enabled = false;
+            string emailAtual = cmbEmail.Text.Trim();
+            string senhaAtual = txtSenha.Text;
+            string servidorAtual = txtServerLogin.Text.Trim();
+
+            if (string.IsNullOrEmpty(emailAtual) || string.IsNullOrEmpty(senhaAtual) || string.IsNullOrEmpty(servidorAtual))
+            {
+                lblStatusLogin.Text = "Preencha todos os campos!";
+                lblStatusLogin.ForeColor = Color.Red;
+                return;
+            }
+
+            lblStatusLogin.Text = "● Autenticando com a OAS Games...";
+            lblStatusLogin.ForeColor = Color.Orange;
+            btnLogar.Enabled = false;
+
+            this.sessionID = "Conta_" + string.Join("_", emailAtual.Split(Path.GetInvalidFileNameChars()));
 
             try
             {
@@ -182,21 +171,47 @@ namespace NarutoLauncherLegacy
                 using (var client = new HttpClient(handler))
                 {
                     string url = $"https://passport.oasgames.com/?m=login&email={Uri.EscapeDataString(emailAtual)}&pwd={Uri.EscapeDataString(senhaAtual)}&remember=1";
-                    client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 Gamebox/3.4.7.0"); client.DefaultRequestHeaders.Add("Referer", "https://naruto.narutowebgame.com/pt/");
-                    var response = await client.GetAsync(url); var content = await response.Content.ReadAsStringAsync();
+                    client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 Gamebox/3.4.7.0");
+                    client.DefaultRequestHeaders.Add("Referer", "https://naruto.narutowebgame.com/pt/");
+
+                    var response = await client.GetAsync(url);
+                    var content = await response.Content.ReadAsStringAsync();
 
                     if (content.Contains("ok") || content.Contains("success"))
                     {
+                        if (browser != null)
+                        {
+                            this.Controls.Remove(browser);
+                            browser.Dispose();
+                        }
+
+                        InitBrowserModule();
+
                         var manager = browser.RequestContext.GetCookieManager(null);
                         foreach (System.Net.Cookie cookie in handler.CookieContainer.GetCookies(new Uri("https://passport.oasgames.com")))
                         {
                             var cefCookie = new CefSharp.Cookie { Name = cookie.Name, Value = cookie.Value, Domain = ".oasgames.com", Path = "/" };
-                            await manager.SetCookieAsync("https://oasgames.com", cefCookie); cefCookie.Domain = ".narutowebgame.com"; await manager.SetCookieAsync("https://narutowebgame.com", cefCookie);
+                            await manager.SetCookieAsync("https://oasgames.com", cefCookie);
+                            cefCookie.Domain = ".narutowebgame.com";
+                            await manager.SetCookieAsync("https://narutowebgame.com", cefCookie);
                         }
-                        GerenciarSalvamentoDeConta(emailAtual, senhaAtual); pnlLogin.Visible = false; pnlMenuLateral.Visible = true; btnToggleMenu.Visible = true; btnToggleMenu.BringToFront();
-                        txtServerMenu.Text = servidorAtual; CarregarJogo(servidorAtual); MemoryInjector.OtimizarRAM(true);
+
+                        GerenciarSalvamentoDeConta(emailAtual, senhaAtual);
+                        pnlLogin.Visible = false;
+                        pnlMenuLateral.Visible = true;
+                        btnToggleMenu.Visible = true;
+                        btnToggleMenu.BringToFront();
+
+                        txtServerMenu.Text = servidorAtual;
+                        CarregarJogo(servidorAtual);
+                        MemoryInjector.OtimizarRAM(true);
                     }
-                    else { lblStatusLogin.Text = "● Senha Incorreta ou Erro!"; lblStatusLogin.ForeColor = Color.Red; btnLogar.Enabled = true; }
+                    else
+                    {
+                        lblStatusLogin.Text = "● Senha Incorreta ou Erro!";
+                        lblStatusLogin.ForeColor = Color.Red;
+                        btnLogar.Enabled = true;
+                    }
                 }
             }
             catch { lblStatusLogin.Text = "● Servidor Off-line"; btnLogar.Enabled = true; }
@@ -214,7 +229,12 @@ namespace NarutoLauncherLegacy
         private void ResetarEstadoInjecao()
         {
             if (this.InvokeRequired) { this.Invoke(new Action(ResetarEstadoInjecao)); return; }
-            if (meuFlashPid != 0 && pidsInjetadosGlobais.Contains(meuFlashPid)) { pidsInjetadosGlobais.Remove(meuFlashPid); }
+
+            if (meuFlashPid != 0 && pidsInjetadosGlobais.Contains(meuFlashPid))
+            {
+                lock (pidsInjetadosGlobais) { pidsInjetadosGlobais.Remove(meuFlashPid); }
+            }
+
             dllInjetada = false; speedAtivo = false; meuFlashPid = 0;
             btnInjetar.Text = "INJETAR MOTOR"; btnInjetar.BackColor = Color.FromArgb(120, 60, 0); btnInjetar.Enabled = true;
             lblStatusInjecao.Text = "● Aguardando..."; lblStatusInjecao.ForeColor = Color.DimGray;
@@ -225,11 +245,12 @@ namespace NarutoLauncherLegacy
         {
             if (dllInjetada) return;
             meuFlashPid = MemoryInjector.EncontrarProcessoDoFlash(pidsInjetadosGlobais);
-            if (meuFlashPid == -1) { MessageBox.Show("Nenhum processo do jogo livre foi encontrado. Aguarde o boneco aparecer na tela!", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (meuFlashPid == -1) { MessageBox.Show("Nenhum processo do jogo livre foi encontrado nesta janela. Aguarde o boneco aparecer na tela!", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
 
             if (MemoryInjector.InjetarDLL(meuFlashPid))
             {
-                dllInjetada = true; pidsInjetadosGlobais.Add(meuFlashPid);
+                dllInjetada = true;
+                lock (pidsInjetadosGlobais) { pidsInjetadosGlobais.Add(meuFlashPid); }
                 btnInjetar.Text = "MOTOR INJETADO"; btnInjetar.BackColor = Color.FromArgb(0, 100, 0); btnInjetar.Enabled = false;
                 lblStatusInjecao.Text = "● Conectado (PID: " + meuFlashPid + ")"; lblStatusInjecao.ForeColor = Color.LimeGreen;
             }
@@ -246,7 +267,7 @@ namespace NarutoLauncherLegacy
                 btnSpeed.Text = speedAtivo ? "VELOCIDADE: 2X" : "VELOCIDADE: 1X";
                 btnSpeed.BackColor = speedAtivo ? Color.DarkRed : Color.FromArgb(45, 45, 45);
             }
-            else { if (!isShuttingDown) { MessageBox.Show("Conexão perdida. O sistema será redefinido.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning); ResetarEstadoInjecao(); } }
+            else { if (!isShuttingDown) { MessageBox.Show("Conexão perdida com o motor. O sistema será redefinido.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning); ResetarEstadoInjecao(); } }
         }
 
         private void ExecutarLimpezaRAM_Manual()
@@ -288,15 +309,16 @@ namespace NarutoLauncherLegacy
 
         private void CarregarConfiguracoes() { try { if (File.Exists(arquivoConfig)) { string[] v = File.ReadAllText(arquivoConfig).Trim().Split(','); if (v.Length >= 1) discordHabilitado = (v[0] == "1"); if (v.Length >= 2) usarGPU = (v[1] == "1"); } } catch { } }
         private void SalvarConfiguracoes() { try { File.WriteAllText(arquivoConfig, $"{(discordHabilitado ? "1" : "0")},{(usarGPU ? "1" : "0")}"); } catch { } }
-        private void LimparSessoesAntigas() { string p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Sessoes"); if (Directory.Exists(p)) { foreach (string d in Directory.GetDirectories(p)) { try { if (!d.Contains(sessionID)) Directory.Delete(d, true); } catch { } } } }
 
         private void ConfigurarInterface()
         {
             pnlMenuLateral = new Panel { Width = 180, Dock = DockStyle.Right, BackColor = Color.FromArgb(25, 25, 25), Visible = false };
             Label lblTituloMenu = new Label { Text = "CONTROLES", ForeColor = Color.White, Font = new Font("Segoe UI", 10, FontStyle.Bold), Location = new Point(40, 20), AutoSize = true };
             Label lblInstancias = new Label { Text = "Multi-Contas:", ForeColor = Color.DarkGray, Font = new Font("Segoe UI", 8), Location = new Point(15, 55), AutoSize = true };
+
             btnNovaTela = new Button { Text = "ABRIR NOVA TELA", Location = new Point(15, 75), Size = new Size(150, 30), BackColor = Color.FromArgb(0, 90, 158), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            btnNovaTela.Click += (s, e) => { contadorTelas++; new Form1().Show(); };
+            btnNovaTela.Click += (s, e) => { new Form1().Show(); };
+
             Label lblMotor = new Label { Text = "Sistema Central:", ForeColor = Color.DarkGray, Font = new Font("Segoe UI", 8), Location = new Point(15, 120), AutoSize = true };
             btnInjetar = new Button { Text = "INJETAR MOTOR", Location = new Point(15, 140), Size = new Size(150, 30), BackColor = Color.FromArgb(120, 60, 0), ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 8, FontStyle.Bold) };
             btnInjetar.Click += (s, e) => ExecutarInjecaoBase();
@@ -377,9 +399,23 @@ namespace NarutoLauncherLegacy
             isShuttingDown = true;
             if (rastreadorNome != null) { rastreadorNome.Stop(); rastreadorNome.Dispose(); }
             if (discord != null) { discord.Desligar(); }
-            if (Cef.IsInitialized) { Cef.Shutdown(); }
+
+            if (meuFlashPid != 0 && pidsInjetadosGlobais.Contains(meuFlashPid))
+            {
+                lock (pidsInjetadosGlobais) { pidsInjetadosGlobais.Remove(meuFlashPid); }
+            }
+
+            if (browser != null) { browser.Dispose(); }
         }
 
-        protected override void OnFormClosing(FormClosingEventArgs e) { PrepararFechamentoSeguro(); base.OnFormClosing(e); }
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            PrepararFechamentoSeguro();
+
+            if (Application.OpenForms.Count <= 1)
+            {
+                if (Cef.IsInitialized) { Cef.Shutdown(); }
+            }
+        }
     }
 }

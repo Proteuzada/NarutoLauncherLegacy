@@ -37,7 +37,11 @@ namespace NarutoLauncherLegacy
                         if (cmdLine != null && cmdLine.Contains("--type=ppapi"))
                         {
                             int pid = Convert.ToInt32(obj["ProcessId"]);
-                            if (!pidsJaInjetados.Contains(pid)) return pid;
+
+                            lock (pidsJaInjetados)
+                            {
+                                if (!pidsJaInjetados.Contains(pid)) return pid;
+                            }
                         }
                     }
                 }

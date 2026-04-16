@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Management;
+using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -10,59 +10,62 @@ namespace NarutoLauncherLegacy
     public static class SecurityManager
     {
         private static readonly string urlFirebase = "https://seventh-94a18-default-rtdb.firebaseio.com/";
+        private static readonly string caminhoKey = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "user_identity.dat");
 
-        public static string ObterHWID()
+        public static string ObterIdentidade()
         {
-            string hardwareInfo = "";
-            try
+            if (File.Exists(caminhoKey))
             {
-                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
-                    foreach (ManagementObject mo in searcher.Get()) hardwareInfo += mo["SerialNumber"]?.ToString();
+                try { return File.ReadAllText(caminhoKey).Trim().ToUpper(); }
+                catch { }
+            }
 
-                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT ProcessorId FROM Win32_Processor"))
-                    foreach (ManagementObject mo in searcher.Get()) hardwareInfo += mo["ProcessorId"]?.ToString();
+            string novaKey = GerarKeyAleatoria(12);
 
-                if (string.IsNullOrWhiteSpace(hardwareInfo) || hardwareInfo.Length < 5)
+            try { File.WriteAllText(caminhoKey, novaKey); }
+            catch { }
+
+            return novaKey;
+        }
+
+        private static string GerarKeyAleatoria(int tamanho)
+        {
+            const string caracteres = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            StringBuilder res = new StringBuilder();
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            {
+                byte[] uintBuffer = new byte[4];
+                while (res.Length < tamanho)
                 {
-                    using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_PhysicalMedia"))
-                        foreach (ManagementObject mo in searcher.Get()) hardwareInfo += mo["SerialNumber"]?.ToString();
+                    rng.GetBytes(uintBuffer);
+                    uint num = BitConverter.ToUInt32(uintBuffer, 0);
+                    res.Append(caracteres[(int)(num % (uint)caracteres.Length)]);
                 }
             }
-            catch
-            {
-                // CORREÇÃO: Fallback único por PC em caso de falha do WMI
-                hardwareInfo = Environment.MachineName + "_" + Environment.UserName;
-            }
-
-            using (SHA256 sha256 = SHA256.Create())
-            {
-                byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(hardwareInfo));
-                return BitConverter.ToString(hash).Replace("-", "").Substring(0, 12).ToUpper();
-            }
+            return res.ToString();
         }
 
         public static async Task<bool> VerificarAcesso()
         {
-            string meuHwid = ObterHWID();
-            string urlConsulta = $"{urlFirebase}whitelist/{meuHwid}.json";
+            string minhaKey = ObterIdentidade();
+            string urlConsulta = $"{urlFirebase}whitelist/{minhaKey}.json";
 
             using (HttpClient client = new HttpClient())
             {
-                client.Timeout = TimeSpan.FromSeconds(15);
+                client.Timeout = TimeSpan.FromSeconds(10);
                 try
                 {
-                    string resposta = await client.GetStringAsync(urlConsulta);
+                    var response = await client.GetAsync(urlConsulta);
+                    if (!response.IsSuccessStatusCode) return false;
 
-                    // CORREÇÃO: Bloqueia nulos, vazios ou HTML de proxy/provedor
-                    if (string.IsNullOrWhiteSpace(resposta) || resposta.Trim() == "null" || resposta.Trim().StartsWith("<"))
+                    string resposta = await response.Content.ReadAsStringAsync();
+
+                    if (string.IsNullOrWhiteSpace(resposta) || resposta.Trim().ToLower() == "null")
                         return false;
 
                     return true;
                 }
-                catch
-                {
-                    return false;
-                }
+                catch { return false; }
             }
         }
 
@@ -71,21 +74,23 @@ namespace NarutoLauncherLegacy
             try
             {
                 byte[] dados = Encoding.UTF8.GetBytes(senha);
-                byte[] criptografado = ProtectedData.Protect(dados, null, DataProtectionScope.CurrentUser);
-                return Convert.ToBase64String(criptografado);
+                byte[] cripto = ProtectedData.Protect(dados, null, DataProtectionScope.CurrentUser);
+                return Convert.ToBase64String(cripto);
             }
             catch { return ""; }
         }
 
-        public static string DescriptografarSenha(string textoCriptografado)
+        public static string DescriptografarSenha(string texto)
         {
             try
             {
-                byte[] dados = Convert.FromBase64String(textoCriptografado);
-                byte[] descriptografado = ProtectedData.Unprotect(dados, null, DataProtectionScope.CurrentUser);
-                return Encoding.UTF8.GetString(descriptografado);
+                byte[] dados = Convert.FromBase64String(texto);
+                byte[] desc = ProtectedData.Unprotect(dados, null, DataProtectionScope.CurrentUser);
+                return Encoding.UTF8.GetString(desc);
             }
             catch { return ""; }
         }
+
+        public static string ObterPermissoesSandbox() => "allow-scripts allow-same-origin allow-forms allow-popups allow-modals";
     }
 }
